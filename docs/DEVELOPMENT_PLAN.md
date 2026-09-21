@@ -6,6 +6,18 @@ Build a small authoritative multiplayer server in **Go** for Go Heroes.
 
 The MVP exists primarily to learn Go networking and concurrency. Gameplay complexity is intentionally constrained.
 
+## Progress Tracker
+
+This tracker is the source of truth for phase progression.
+
+- [x] Phase 1 — Minimal TCP server
+- [] Phase 2 — Application protocol
+- [] Phase 3 — Matchmaking
+- [] Phase 4 — Pure game rules
+- [] Phase 5 — Connect game + TCP
+- [] Phase 6 — Unity integration contract
+- [] Phase 7 — Robustness
+
 ## 2. MVP boundary
 
 The server must support:
