@@ -59,6 +59,18 @@ func (s *Server) acceptLoop() {
 	}
 }
 
+func writeEvents(conn net.Conn, event protocol.ServerEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	data = append(data, '\n')
+
+	_, err = conn.Write(data)
+	return err
+}
+
 func (s *Server) readLoop(conn net.Conn) {
 	defer conn.Close()
 
@@ -73,6 +85,57 @@ func (s *Server) readLoop(conn net.Conn) {
 		var msg protocol.ClientMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
 			fmt.Println("invalid JSON:", err)
+			err := writeEvents(conn, protocol.ServerEvent{
+				Type:    "error",
+				Message: "invalid JSON",
+			})
+
+			if err != nil {
+				return
+			}
+
+			continue
+		}
+
+		switch msg.Type {
+		case "action":
+			switch msg.Action {
+			case "attack", "defend", "heal":
+				fmt.Print("valid action")
+				err := writeEvents(conn, protocol.ServerEvent{
+					Type:    "success",
+					Message: "valid action",
+				})
+
+				if err != nil {
+					return
+				}
+
+				continue
+			default:
+				fmt.Print("invalid action")
+				err := writeEvents(conn, protocol.ServerEvent{
+					Type:    "error",
+					Message: "unknown action",
+				})
+
+				if err != nil {
+					return
+				}
+
+				continue
+			}
+		default:
+			fmt.Print("invalid type")
+			err := writeEvents(conn, protocol.ServerEvent{
+				Type:    "error",
+				Message: "unknown type",
+			})
+
+			if err != nil {
+				return
+			}
+
 			continue
 		}
 

@@ -11,7 +11,7 @@ The MVP exists primarily to learn Go networking and concurrency. Gameplay comple
 This tracker is the source of truth for phase progression.
 
 - [x] Phase 1 — Minimal TCP server
-- [] Phase 2 — Application protocol
+- [x] Phase 2 — Application protocol
 - [] Phase 3 — Matchmaking
 - [] Phase 4 — Pure game rules
 - [] Phase 5 — Connect game + TCP
