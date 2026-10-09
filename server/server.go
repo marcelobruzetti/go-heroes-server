@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
-	"io"
+	"go-heroes-server/protocol"
 	"net"
 )
 
@@ -59,34 +61,37 @@ func (s *Server) acceptLoop() {
 
 func (s *Server) readLoop(conn net.Conn) {
 	defer conn.Close()
-	buf := make([]byte, 2048)
 
-	for {
-		n, err := conn.Read(buf)
+	scanner := bufio.NewScanner(conn)
 
-		if err == io.EOF {
-			fmt.Println("client disconnected:", conn.RemoteAddr())
-			return
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		payload := make([]byte, len(line))
+		copy(payload, line)
+
+		var msg protocol.ClientMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			fmt.Println("invalid JSON:", err)
+			continue
 		}
 
-		if err != nil {
-			fmt.Println("read error: ", err)
-			return
-		}
-
-		payload := make([]byte, n)
-		copy(payload, buf[:n])
+		fmt.Printf("%+v\n", msg)
 
 		s.msgch <- Message{
 			from:    conn.RemoteAddr().String(),
 			payload: payload,
 		}
 
-		_, err = conn.Write([]byte("thank you for your message!\n"))
+		_, err := conn.Write([]byte("thank you for your message!\n"))
 		if err != nil {
-			fmt.Println("write error:", err)
 			return
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Println("read error: ", err)
+		return
 	}
 }
 
