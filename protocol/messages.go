@@ -1,3 +1,4 @@
+// Package protocol defines messages exchanged by Go Heroes clients and server.
 package protocol
 
 // ClientMessage is a command sent from a client to the server.

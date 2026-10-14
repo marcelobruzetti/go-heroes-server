@@ -1,3 +1,4 @@
+// Package main starts the Go Heroes multiplayer server.
 package main
 
 import (
