@@ -163,10 +163,9 @@ func (s *Server) disconnect(client *Client) {
 /*
 msg examples:
 
-	not json
-	{"type":"ping"}
-	{"type":"action","action":"dance"}
 	{"type":"action","action":"attack"}
+	{"type":"action","action":"defend"}
+	{"type":"action","action":"heal"}
 */
 func (s *Server) readLoop(client *Client) {
 	defer s.disconnect(client)
