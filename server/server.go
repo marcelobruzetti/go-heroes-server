@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// Server accepts client connections and coordinates matchmaking.
 type Server struct {
 	listenAddr           string
 	ln                   net.Listener
@@ -26,6 +27,7 @@ type clientDisconnected struct {
 	Client *Client
 }
 
+// NewServer creates a server that listens on listenAddr.
 func NewServer(listenAddr string) *Server {
 	return &Server{
 		listenAddr:           listenAddr,
@@ -35,6 +37,7 @@ func NewServer(listenAddr string) *Server {
 	}
 }
 
+// Start begins accepting client connections until the server stops.
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {

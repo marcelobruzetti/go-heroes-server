@@ -7,6 +7,7 @@ import (
 	"sync"
 )
 
+// Client represents a connected player and its TCP connection.
 type Client struct {
 	ID      string
 	Conn    net.Conn
@@ -21,6 +22,7 @@ func newClient(conn net.Conn, id string) *Client {
 	}
 }
 
+// Send serializes and writes an event to the client's connection.
 func (c *Client) Send(event protocol.ServerEvent) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()

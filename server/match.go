@@ -2,6 +2,7 @@ package server
 
 import "github.com/google/uuid"
 
+// Match represents a two-player match managed by the server.
 type Match struct {
 	ID      string
 	Players [2]*Client
