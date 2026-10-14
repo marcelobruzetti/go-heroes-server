@@ -6,25 +6,32 @@ import (
 	"fmt"
 	"go-heroes-server/protocol"
 	"net"
+
+	"github.com/google/uuid"
 )
 
-type Message struct {
-	from    string
-	payload []byte
+type Server struct {
+	listenAddr           string
+	ln                   net.Listener
+	quitCh               chan struct{}
+	clientConnectedCh    chan clientConnected
+	clientDisconnectedCh chan clientDisconnected
 }
 
-type Server struct {
-	listenAddr string
-	ln         net.Listener
-	quitch     chan struct{}
-	msgch      chan Message
+type clientConnected struct {
+	Client *Client
+}
+
+type clientDisconnected struct {
+	Client *Client
 }
 
 func NewServer(listenAddr string) *Server {
 	return &Server{
-		listenAddr: listenAddr,
-		quitch:     make(chan struct{}),
-		msgch:      make(chan Message, 10),
+		listenAddr:           listenAddr,
+		quitCh:               make(chan struct{}),
+		clientConnectedCh:    make(chan clientConnected),
+		clientDisconnectedCh: make(chan clientDisconnected),
 	}
 }
 
@@ -36,13 +43,90 @@ func (s *Server) Start() error {
 	defer ln.Close()
 	s.ln = ln
 
-	go s.handleMessages()
+	go s.matchmakingLoop()
 	go s.acceptLoop()
 
-	<-s.quitch
-	close(s.msgch)
+	<-s.quitCh
 
 	return nil
+}
+
+func (s *Server) matchmakingLoop() {
+	matches := make(map[string]*Match)
+	var waitingClient *Client
+
+	for {
+		select {
+		case event := <-s.clientConnectedCh:
+			fmt.Println("matchmaking received client:", event.Client.ID)
+
+			if waitingClient == nil {
+				waitingClient = event.Client
+				fmt.Println("client", waitingClient.ID, "is waiting")
+
+				err := waitingClient.Send(protocol.ServerEvent{
+					Type: "waiting",
+				})
+
+				if err != nil {
+					fmt.Println("failed to notify waiting client:", err)
+					waitingClient = nil
+					continue
+				}
+
+				continue
+			}
+
+			first := waitingClient
+			second := event.Client
+			match := newMatch(first, second)
+			fmt.Println("two clients joined: ", first.ID, "|", second.ID, "| MatchID: ", match.ID)
+
+			err := first.Send(protocol.ServerEvent{
+				Type:    "match_started",
+				MatchID: match.ID,
+			})
+
+			if err != nil {
+				fmt.Println("failed to notify first matched client:", err)
+				waitingClient = second
+				if err := waitingClient.Send(protocol.ServerEvent{Type: "waiting"}); err != nil {
+					fmt.Println("failed to notify replacement waiting client:", err)
+					waitingClient = nil
+				}
+				continue
+			}
+
+			err = second.Send(protocol.ServerEvent{
+				Type:    "match_started",
+				MatchID: match.ID,
+			})
+
+			if err != nil {
+				fmt.Println("failed to notify second matched client:", err)
+				waitingClient = first
+				if err := waitingClient.Send(protocol.ServerEvent{Type: "waiting"}); err != nil {
+					fmt.Println("failed to requeue first matched client:", err)
+					waitingClient = nil
+				}
+				continue
+			}
+
+			first.matchID = match.ID
+			second.matchID = match.ID
+			matches[match.ID] = match
+			waitingClient = nil
+
+		case event := <-s.clientDisconnectedCh:
+			fmt.Println("client disconnected:", event.Client.ID)
+
+			if waitingClient == event.Client {
+				waitingClient = nil
+				fmt.Println("removed waiting client:", event.Client.ID)
+			}
+		}
+	}
+
 }
 
 func (s *Server) acceptLoop() {
@@ -53,39 +137,46 @@ func (s *Server) acceptLoop() {
 			continue
 		}
 
-		fmt.Println("new connection to the server:", conn.RemoteAddr())
+		client := newClient(conn, uuid.New().String())
 
-		go s.readLoop(conn)
+		fmt.Println("new connection from:", conn.RemoteAddr(),
+			" | client ID: ", client.ID)
+
+		s.clientConnectedCh <- clientConnected{
+			Client: client,
+		}
+
+		go s.readLoop(client)
 	}
 }
 
-func writeEvents(conn net.Conn, event protocol.ServerEvent) error {
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
+func (s *Server) disconnect(client *Client) {
+	client.Conn.Close()
+	s.clientDisconnectedCh <- clientDisconnected{
+		Client: client,
 	}
-
-	data = append(data, '\n')
-
-	_, err = conn.Write(data)
-	return err
 }
 
-func (s *Server) readLoop(conn net.Conn) {
-	defer conn.Close()
+/*
+msg examples:
 
-	scanner := bufio.NewScanner(conn)
+	not json
+	{"type":"ping"}
+	{"type":"action","action":"dance"}
+	{"type":"action","action":"attack"}
+*/
+func (s *Server) readLoop(client *Client) {
+	defer s.disconnect(client)
+
+	scanner := bufio.NewScanner(client.Conn)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
-		payload := make([]byte, len(line))
-		copy(payload, line)
-
 		var msg protocol.ClientMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			fmt.Println("invalid JSON:", err)
-			err := writeEvents(conn, protocol.ServerEvent{
+			fmt.Println(client.ID, "- invalid JSON:", err)
+			err := client.Send(protocol.ServerEvent{
 				Type:    "error",
 				Message: "invalid JSON",
 			})
@@ -101,8 +192,8 @@ func (s *Server) readLoop(conn net.Conn) {
 		case "action":
 			switch msg.Action {
 			case "attack", "defend", "heal":
-				fmt.Print("valid action")
-				err := writeEvents(conn, protocol.ServerEvent{
+				fmt.Println(client.ID, "- valid action")
+				err := client.Send(protocol.ServerEvent{
 					Type:    "success",
 					Message: "valid action",
 				})
@@ -113,8 +204,8 @@ func (s *Server) readLoop(conn net.Conn) {
 
 				continue
 			default:
-				fmt.Print("invalid action")
-				err := writeEvents(conn, protocol.ServerEvent{
+				fmt.Println(client.ID, "- invalid action")
+				err := client.Send(protocol.ServerEvent{
 					Type:    "error",
 					Message: "unknown action",
 				})
@@ -126,8 +217,8 @@ func (s *Server) readLoop(conn net.Conn) {
 				continue
 			}
 		default:
-			fmt.Print("invalid type")
-			err := writeEvents(conn, protocol.ServerEvent{
+			fmt.Println(client.ID, "- invalid type")
+			err := client.Send(protocol.ServerEvent{
 				Type:    "error",
 				Message: "unknown type",
 			})
@@ -138,28 +229,10 @@ func (s *Server) readLoop(conn net.Conn) {
 
 			continue
 		}
-
-		fmt.Printf("%+v\n", msg)
-
-		s.msgch <- Message{
-			from:    conn.RemoteAddr().String(),
-			payload: payload,
-		}
-
-		_, err := conn.Write([]byte("thank you for your message!\n"))
-		if err != nil {
-			return
-		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Println("read error: ", err)
 		return
-	}
-}
-
-func (s *Server) handleMessages() {
-	for msg := range s.msgch {
-		fmt.Printf("received message from connection (%s): %s", msg.from, string(msg.payload))
 	}
 }

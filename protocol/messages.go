@@ -8,4 +8,5 @@ type ClientMessage struct {
 type ServerEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message,omitempty"`
+	MatchID string `json:"match_id,omitempty"`
 }
