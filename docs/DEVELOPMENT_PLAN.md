@@ -12,7 +12,7 @@ This tracker is the source of truth for phase progression.
 
 - [x] Phase 1 — Minimal TCP server
 - [x] Phase 2 — Application protocol
-- [] Phase 3 — Matchmaking
+- [x] Phase 3 — Matchmaking
 - [] Phase 4 — Pure game rules
 - [] Phase 5 — Connect game + TCP
 - [] Phase 6 — Unity integration contract
