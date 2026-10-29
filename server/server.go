@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"go-heroes-server/game"
 	"go-heroes-server/protocol"
 	"net"
 
@@ -17,6 +18,7 @@ type Server struct {
 	quitCh               chan struct{}
 	clientConnectedCh    chan clientConnected
 	clientDisconnectedCh chan clientDisconnected
+	clientActionCh       chan clientAction
 }
 
 type clientConnected struct {
@@ -27,6 +29,11 @@ type clientDisconnected struct {
 	Client *Client
 }
 
+type clientAction struct {
+	Client *Client
+	Action game.Action
+}
+
 // NewServer creates a server that listens on listenAddr.
 func NewServer(listenAddr string) *Server {
 	return &Server{
@@ -34,6 +41,7 @@ func NewServer(listenAddr string) *Server {
 		quitCh:               make(chan struct{}),
 		clientConnectedCh:    make(chan clientConnected),
 		clientDisconnectedCh: make(chan clientDisconnected),
+		clientActionCh:       make(chan clientAction),
 	}
 }
 
@@ -118,6 +126,7 @@ func (s *Server) matchmakingLoop() {
 			first.matchID = match.ID
 			second.matchID = match.ID
 			matches[match.ID] = match
+			broadcastGameState(match)
 			waitingClient = nil
 
 		case event := <-s.clientDisconnectedCh:
@@ -126,6 +135,49 @@ func (s *Server) matchmakingLoop() {
 			if waitingClient == event.Client {
 				waitingClient = nil
 				fmt.Println("removed waiting client:", event.Client.ID)
+			}
+
+		case event := <-s.clientActionCh:
+			fmt.Println(
+				"received action from:", event.Client.ID,
+				"| action:", event.Action,
+			)
+
+			match, found := matches[event.Client.matchID]
+			if !found {
+				err := event.Client.Send(protocol.ServerEvent{
+					Type:    "action_rejected",
+					Message: "no active match",
+				})
+				if err != nil {
+					fmt.Println("failed to reject action:", err)
+				}
+				continue
+			}
+
+			if err := match.Game.ApplyAction(event.Client.ID, event.Action); err != nil {
+				fmt.Println("action rejected:", err)
+
+				if sendErr := event.Client.Send(protocol.ServerEvent{
+					Type:    "action_rejected",
+					Message: err.Error(),
+				}); sendErr != nil {
+					fmt.Println("failed to notify client:", sendErr)
+				}
+
+				continue
+			}
+
+			broadcastGameState(match)
+
+			if match.Game.Status == game.StatusFinished {
+				broadcastGameOver(match)
+
+				delete(matches, match.ID)
+
+				for _, player := range match.Players {
+					player.matchID = ""
+				}
 			}
 		}
 	}
@@ -194,14 +246,9 @@ func (s *Server) readLoop(client *Client) {
 		case "action":
 			switch msg.Action {
 			case "attack", "defend", "heal":
-				fmt.Println(client.ID, "- valid action")
-				err := client.Send(protocol.ServerEvent{
-					Type:    "success",
-					Message: "valid action",
-				})
-
-				if err != nil {
-					return
+				s.clientActionCh <- clientAction{
+					Client: client,
+					Action: game.Action(msg.Action),
 				}
 
 				continue
@@ -236,5 +283,45 @@ func (s *Server) readLoop(client *Client) {
 	if err := scanner.Err(); err != nil {
 		fmt.Println("read error: ", err)
 		return
+	}
+}
+
+func broadcastGameState(match *Match) {
+	state := gameStateFromGame(match.Game)
+
+	event := protocol.ServerEvent{
+		Type:      "game_state",
+		MatchID:   match.ID,
+		GameState: state,
+	}
+
+	for _, player := range match.Players {
+		if err := player.Send(event); err != nil {
+			fmt.Println("failed to send game state:", err)
+		}
+	}
+}
+
+func broadcastGameOver(match *Match) {
+	winnerID := match.Game.Players[0].ID
+	if match.Game.Players[0].HP == 0 {
+		winnerID = match.Game.Players[1].ID
+	}
+
+	for _, player := range match.Players {
+		result := "lose"
+		if player.ID == winnerID {
+			result = "win"
+		}
+
+		event := protocol.ServerEvent{
+			Type:    "game_over",
+			MatchID: match.ID,
+			Result:  result,
+		}
+
+		if err := player.Send(event); err != nil {
+			fmt.Println("failed to send game over:", err)
+		}
 	}
 }
