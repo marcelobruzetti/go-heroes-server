@@ -16,12 +16,12 @@ type Server struct {
 	listenAddr           string
 	ln                   net.Listener
 	quitCh               chan struct{}
-	clientConnectedCh    chan clientConnected
 	clientDisconnectedCh chan clientDisconnected
 	clientActionCh       chan clientAction
+	clientQueueCh        chan clientQueue
 }
 
-type clientConnected struct {
+type clientQueue struct {
 	Client *Client
 }
 
@@ -39,9 +39,9 @@ func NewServer(listenAddr string) *Server {
 	return &Server{
 		listenAddr:           listenAddr,
 		quitCh:               make(chan struct{}),
-		clientConnectedCh:    make(chan clientConnected),
 		clientDisconnectedCh: make(chan clientDisconnected),
 		clientActionCh:       make(chan clientAction),
+		clientQueueCh:        make(chan clientQueue),
 	}
 }
 
@@ -68,8 +68,28 @@ func (s *Server) matchmakingLoop() {
 
 	for {
 		select {
-		case event := <-s.clientConnectedCh:
+		case event := <-s.clientQueueCh:
 			fmt.Println("matchmaking received client:", event.Client.ID)
+
+			if event.Client.matchID != "" {
+				if err := event.Client.Send(protocol.ServerEvent{
+					Type:    "queue_rejected",
+					Message: "already in an active match",
+				}); err != nil {
+					fmt.Println("failed to reject queued client:", err)
+				}
+				continue
+			}
+
+			if waitingClient == event.Client {
+				if err := event.Client.Send(protocol.ServerEvent{
+					Type:    "queue_rejected",
+					Message: "already waiting for an opponent",
+				}); err != nil {
+					fmt.Println("failed to reject queued client:", err)
+				}
+				continue
+			}
 
 			if waitingClient == nil {
 				waitingClient = event.Client
@@ -197,10 +217,6 @@ func (s *Server) acceptLoop() {
 		fmt.Println("new connection from:", conn.RemoteAddr(),
 			" | client ID: ", client.ID)
 
-		s.clientConnectedCh <- clientConnected{
-			Client: client,
-		}
-
 		go s.readLoop(client)
 	}
 }
@@ -215,6 +231,7 @@ func (s *Server) disconnect(client *Client) {
 /*
 msg examples:
 
+	{"type":"queue"}
 	{"type":"action","action":"attack"}
 	{"type":"action","action":"defend"}
 	{"type":"action","action":"heal"}
@@ -243,6 +260,13 @@ func (s *Server) readLoop(client *Client) {
 		}
 
 		switch msg.Type {
+		case "queue":
+			s.clientQueueCh <- clientQueue{
+				Client: client,
+			}
+
+			continue
+
 		case "action":
 			switch msg.Action {
 			case "attack", "defend", "heal":
