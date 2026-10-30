@@ -12,6 +12,7 @@ type ServerEvent struct {
 	Type      string     `json:"type"`
 	Message   string     `json:"message,omitempty"`
 	MatchID   string     `json:"match_id,omitempty"`
+	PlayerID  string     `json:"player_id,omitempty"`
 	GameState *GameState `json:"game_state,omitempty"`
 	Result    string     `json:"result,omitempty"`
 }

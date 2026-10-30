@@ -217,6 +217,15 @@ func (s *Server) acceptLoop() {
 		fmt.Println("new connection from:", conn.RemoteAddr(),
 			" | client ID: ", client.ID)
 
+		if err := client.Send(protocol.ServerEvent{
+			Type:     "connected",
+			PlayerID: client.ID,
+		}); err != nil {
+			fmt.Println("failed to send connected event:", err)
+			conn.Close()
+			continue
+		}
+
 		go s.readLoop(client)
 	}
 }
