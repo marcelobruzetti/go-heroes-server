@@ -157,6 +157,45 @@ func (s *Server) matchmakingLoop() {
 				fmt.Println("removed waiting client:", event.Client.ID)
 			}
 
+			if event.Client.matchID == "" {
+				continue
+			}
+
+			match, found := matches[event.Client.matchID]
+			if !found {
+				fmt.Println("disconnected client had no active match:", event.Client.ID)
+				continue
+			}
+
+			fmt.Println(
+				"client disconnected from match:",
+				match.ID,
+				"| client ID:",
+				event.Client.ID,
+			)
+
+			for _, player := range match.Players {
+				if player == event.Client {
+					continue
+				}
+
+				err := player.Send(protocol.ServerEvent{
+					Type:    "game_over",
+					MatchID: match.ID,
+					Result:  "win",
+					Message: "opponent disconnected",
+				})
+				if err != nil {
+					fmt.Println("failed to notify remaining player:", err)
+				}
+			}
+
+			delete(matches, match.ID)
+
+			for _, player := range match.Players {
+				player.matchID = ""
+			}
+
 		case event := <-s.clientActionCh:
 			fmt.Println(
 				"received action from:", event.Client.ID,
