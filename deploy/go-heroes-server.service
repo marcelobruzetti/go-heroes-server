@@ -9,6 +9,7 @@ User=goheroes
 Group=goheroes
 WorkingDirectory=/opt/go-heroes-server
 Environment=PORT=8081
+Environment=WEBSOCKET_ADDR=127.0.0.1:8082
 ExecStart=/opt/go-heroes-server/go-heroes-server
 Restart=on-failure
 RestartSec=5s

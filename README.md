@@ -158,6 +158,27 @@ The active game state should remain in memory until persistence is genuinely use
 
 See [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md).
 
+## Browser clients
+
+The server supports both its original TCP protocol and browser-compatible
+WebSockets. TCP listens on `PORT` (default `3000`). The WebSocket endpoint is
+`/ws` on `WEBSOCKET_ADDR` (default `:8082`). Both transports exchange the same
+JSON messages; TCP uses newline-delimited JSON while WebSockets use one JSON
+object per text message.
+
+For a public deployment, terminate TLS in Nginx and proxy `/ws` to the local
+WebSocket listener. Keep the Go listener private to the droplet:
+
+```ini
+WEBSOCKET_ADDR=127.0.0.1:8082
+ALLOWED_ORIGINS=game.example.com
+```
+
+`ALLOWED_ORIGINS` is a comma-separated list of authorized browser origin hosts.
+It is needed when the WebSocket endpoint has a different host from the game
+page. If Nginx proxies `/ws` from the same game host and preserves the `Host`
+header, that host is authorized automatically.
+
 ## Status
 
 **Planning / learning project**

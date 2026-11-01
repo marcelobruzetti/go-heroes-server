@@ -3,22 +3,27 @@ package server
 import (
 	"encoding/json"
 	"go-heroes-server/protocol"
-	"net"
+	"io"
 	"sync"
 )
 
-// Client represents a connected player and its TCP connection.
+// Client represents a connected player independently of its network transport.
 type Client struct {
-	ID      string
-	Conn    net.Conn
-	writeMu sync.Mutex
-	matchID string
+	ID        string
+	reader    io.Reader
+	send      func([]byte) error
+	close     func() error
+	writeMu   sync.Mutex
+	closeOnce sync.Once
+	matchID   string
 }
 
-func newClient(conn net.Conn, id string) *Client {
+func newClient(id string, reader io.Reader, send func([]byte) error, close func() error) *Client {
 	return &Client{
-		ID:   id,
-		Conn: conn,
+		ID:     id,
+		reader: reader,
+		send:   send,
+		close:  close,
 	}
 }
 
@@ -32,8 +37,11 @@ func (c *Client) Send(event protocol.ServerEvent) error {
 		return err
 	}
 
-	data = append(data, '\n')
+	return c.send(data)
+}
 
-	_, err = c.Conn.Write(data)
-	return err
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		_ = c.close()
+	})
 }

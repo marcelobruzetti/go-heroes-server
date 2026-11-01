@@ -2,19 +2,24 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"go-heroes-server/game"
 	"go-heroes-server/protocol"
 	"net"
-
-	"github.com/google/uuid"
+	"net/http"
 )
 
 // Server accepts client connections and coordinates matchmaking.
 type Server struct {
 	listenAddr           string
+	webSocketAddr        string
+	allowedOrigins       []string
 	ln                   net.Listener
+	webSocketLn          net.Listener
 	quitCh               chan struct{}
 	clientDisconnectedCh chan clientDisconnected
 	clientActionCh       chan clientAction
@@ -35,9 +40,11 @@ type clientAction struct {
 }
 
 // NewServer creates a server that listens on listenAddr.
-func NewServer(listenAddr string) *Server {
+func NewServer(listenAddr, webSocketAddr string, allowedOrigins []string) *Server {
 	return &Server{
 		listenAddr:           listenAddr,
+		webSocketAddr:        webSocketAddr,
+		allowedOrigins:       allowedOrigins,
 		quitCh:               make(chan struct{}),
 		clientDisconnectedCh: make(chan clientDisconnected),
 		clientActionCh:       make(chan clientAction),
@@ -53,6 +60,21 @@ func (s *Server) Start() error {
 	}
 	defer ln.Close()
 	s.ln = ln
+
+	webSocketLn, err := net.Listen("tcp", s.webSocketAddr)
+	if err != nil {
+		return err
+	}
+	defer webSocketLn.Close()
+	s.webSocketLn = webSocketLn
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWebSocket)
+	go func() {
+		if err := http.Serve(webSocketLn, mux); err != nil && err != http.ErrServerClosed {
+			fmt.Println("websocket server error:", err)
+		}
+	}()
 
 	go s.matchmakingLoop()
 	go s.acceptLoop()
@@ -251,7 +273,16 @@ func (s *Server) acceptLoop() {
 			continue
 		}
 
-		client := newClient(conn, uuid.New().String())
+		client := newClient(
+			uuid.New().String(),
+			conn,
+			func(data []byte) error {
+				data = append(data, '\n')
+				_, err := conn.Write(data)
+				return err
+			},
+			conn.Close,
+		)
 
 		fmt.Println("new connection from:", conn.RemoteAddr(),
 			" | client ID: ", client.ID)
@@ -270,7 +301,7 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) disconnect(client *Client) {
-	client.Conn.Close()
+	client.Close()
 	s.clientDisconnectedCh <- clientDisconnected{
 		Client: client,
 	}
@@ -287,7 +318,7 @@ msg examples:
 func (s *Server) readLoop(client *Client) {
 	defer s.disconnect(client)
 
-	scanner := bufio.NewScanner(client.Conn)
+	scanner := bufio.NewScanner(client.reader)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -307,54 +338,102 @@ func (s *Server) readLoop(client *Client) {
 			continue
 		}
 
-		switch msg.Type {
-		case "queue":
-			s.clientQueueCh <- clientQueue{
-				Client: client,
-			}
-
-			continue
-
-		case "action":
-			switch msg.Action {
-			case "attack", "defend", "heal":
-				s.clientActionCh <- clientAction{
-					Client: client,
-					Action: game.Action(msg.Action),
-				}
-
-				continue
-			default:
-				fmt.Println(client.ID, "- invalid action")
-				err := client.Send(protocol.ServerEvent{
-					Type:    "error",
-					Message: "unknown action",
-				})
-
-				if err != nil {
-					return
-				}
-
-				continue
-			}
-		default:
-			fmt.Println(client.ID, "- invalid type")
-			err := client.Send(protocol.ServerEvent{
-				Type:    "error",
-				Message: "unknown type",
-			})
-
-			if err != nil {
-				return
-			}
-
-			continue
-		}
+		s.handleMessage(client, msg)
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Println("read error: ", err)
+	}
+}
+
+func (s *Server) handleMessage(client *Client, msg protocol.ClientMessage) {
+	switch msg.Type {
+	case "queue":
+		s.clientQueueCh <- clientQueue{Client: client}
+
+	case "action":
+		switch msg.Action {
+		case "attack", "defend", "heal":
+			s.clientActionCh <- clientAction{
+				Client: client,
+				Action: game.Action(msg.Action),
+			}
+		default:
+			fmt.Println(client.ID, "- invalid action")
+			if err := client.Send(protocol.ServerEvent{
+				Type:    "error",
+				Message: "unknown action",
+			}); err != nil {
+				fmt.Println("failed to send error:", err)
+			}
+		}
+	default:
+		fmt.Println(client.ID, "- invalid type")
+		if err := client.Send(protocol.ServerEvent{
+			Type:    "error",
+			Message: "unknown type",
+		}); err != nil {
+			fmt.Println("failed to send error:", err)
+		}
+	}
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: s.allowedOrigins,
+	})
+	if err != nil {
+		fmt.Println("websocket upgrade failed:", err)
 		return
+	}
+
+	client := newClient(
+		uuid.New().String(),
+		nil,
+		func(data []byte) error {
+			return conn.Write(context.Background(), websocket.MessageText, data)
+		},
+		func() error {
+			return conn.Close(websocket.StatusNormalClosure, "connection closed")
+		},
+	)
+
+	fmt.Println("new websocket connection from:", r.RemoteAddr, " | client ID:", client.ID)
+
+	if err := client.Send(protocol.ServerEvent{Type: "connected", PlayerID: client.ID}); err != nil {
+		fmt.Println("failed to send connected event:", err)
+		client.Close()
+		return
+	}
+
+	go s.readWebSocketLoop(client, conn)
+}
+
+func (s *Server) readWebSocketLoop(client *Client, conn *websocket.Conn) {
+	defer s.disconnect(client)
+
+	for {
+		messageType, data, err := conn.Read(context.Background())
+		if err != nil {
+			return
+		}
+		if messageType != websocket.MessageText {
+			if err := client.Send(protocol.ServerEvent{Type: "error", Message: "text messages only"}); err != nil {
+				return
+			}
+			continue
+		}
+
+		var msg protocol.ClientMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			fmt.Println(client.ID, "- invalid JSON:", err)
+			if err := client.Send(protocol.ServerEvent{Type: "error", Message: "invalid JSON"}); err != nil {
+				return
+			}
+			continue
+		}
+
+		s.handleMessage(client, msg)
 	}
 }
 
