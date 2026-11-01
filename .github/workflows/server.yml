@@ -1,0 +1,92 @@
+name: Server CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-heroes-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Format, test, and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build Linux server binary
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: amd64
+          GOOS: linux
+        run: go build -trimpath -o dist/go-heroes-server .
+
+      - name: Upload deployable binary
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-heroes-server-linux-amd64
+          path: dist/go-heroes-server
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy to DigitalOcean
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download deployable binary
+        uses: actions/download-artifact@v4
+        with:
+          name: go-heroes-server-linux-amd64
+          path: dist
+
+      - name: Load deploy SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust the Droplet host key
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload, activate, and verify release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          scp dist/go-heroes-server "$target:/tmp/go-heroes-server.new"
+          ssh "$target" '
+            install -m 0755 /tmp/go-heroes-server.new /opt/go-heroes-server/go-heroes-server.new &&
+            mv /opt/go-heroes-server/go-heroes-server.new /opt/go-heroes-server/go-heroes-server &&
+            rm -f /tmp/go-heroes-server.new &&
+            sudo systemctl restart go-heroes-server &&
+            sudo systemctl is-active --quiet go-heroes-server
+          '

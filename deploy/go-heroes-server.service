@@ -1,0 +1,23 @@
+[Unit]
+Description=Go Heroes authoritative multiplayer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goheroes
+Group=goheroes
+WorkingDirectory=/opt/go-heroes-server
+Environment=PORT=8081
+ExecStart=/opt/go-heroes-server/go-heroes-server
+Restart=on-failure
+RestartSec=5s
+
+# This process only needs outbound/inbound network access and its working directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
