@@ -168,7 +168,7 @@ func (s *Server) matchmakingLoop() {
 			first.matchID = match.ID
 			second.matchID = match.ID
 			matches[match.ID] = match
-			broadcastGameState(match)
+			broadcastGameState(match, "", "")
 			waitingClient = nil
 
 		case event := <-s.clientDisconnectedCh:
@@ -249,7 +249,7 @@ func (s *Server) matchmakingLoop() {
 				continue
 			}
 
-			broadcastGameState(match)
+			broadcastGameState(match, string(event.Action), event.Client.ID)
 
 			if match.Game.Status == game.StatusFinished {
 				broadcastGameOver(match)
@@ -437,13 +437,15 @@ func (s *Server) readWebSocketLoop(client *Client, conn *websocket.Conn) {
 	}
 }
 
-func broadcastGameState(match *Match) {
+func broadcastGameState(match *Match, action string, actionPlayerID string) {
 	state := gameStateFromGame(match.Game)
 
 	event := protocol.ServerEvent{
 		Type:      "game_state",
 		MatchID:   match.ID,
 		GameState: state,
+		Action:    action,
+		PlayerID:  actionPlayerID,
 	}
 
 	for _, player := range match.Players {

@@ -15,6 +15,7 @@ type ServerEvent struct {
 	PlayerID  string     `json:"player_id,omitempty"`
 	GameState *GameState `json:"game_state,omitempty"`
 	Result    string     `json:"result,omitempty"`
+	Action    string     `json:"action,omitempty"`
 }
 
 type PlayerState struct {
